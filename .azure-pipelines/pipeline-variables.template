@@ -1,0 +1,160 @@
+# Azure DevOps Pipeline Variables Template
+# Copy these variables to your Azure DevOps Variable Groups for secure configuration
+
+# =============================================================================
+# VARIABLE GROUP: container-registry-config
+# Description: Configuration for Azure Container Registry and container builds
+# =============================================================================
+
+# Azure Container Registry Configuration
+AZURE_CONTAINER_REGISTRY: "your-acr-name.azurecr.io"
+ACR_SERVICE_CONNECTION: "azure-container-registry-connection"  # Service connection name in Azure DevOps
+
+# Container Image Configuration
+IMAGE_REPOSITORY: "azure-mcp-server"
+IMAGE_TAG: "latest"  # Will be overridden by pipeline versioning
+
+# =============================================================================
+# VARIABLE GROUP: terraform-config  
+# Description: Terraform backend and Azure service connection configuration
+# =============================================================================
+
+# Azure Service Connection
+AZURE_SERVICE_CONNECTION: "azure-terraform-connection"  # Service connection name in Azure DevOps
+
+# Terraform Backend Configuration
+TERRAFORM_BACKEND_RG: "rg-terraform-backend"           # Resource group for Terraform state storage
+TERRAFORM_BACKEND_SA: "terraformbackendsa123"          # Storage account for Terraform state (globally unique)
+
+# =============================================================================
+# VARIABLE GROUP: environment-config-dev
+# Description: Development environment specific configuration
+# =============================================================================
+
+# Deployment Configuration - DEV
+LOCATION: "East US"
+ENVIRONMENT: "dev"
+RESOURCE_GROUP_NAME: ""  # Leave empty for auto-generated name
+
+# Container Configuration - DEV
+CONTAINER_CPU: 1.0
+CONTAINER_MEMORY: 2.0
+
+# Permissions Configuration - DEV
+ENABLE_CONTRIBUTOR_ACCESS: true
+ENABLE_SUBSCRIPTION_READER: true
+
+# =============================================================================
+# VARIABLE GROUP: environment-config-staging
+# Description: Staging environment specific configuration
+# =============================================================================
+
+# Deployment Configuration - STAGING
+LOCATION: "West US 2"
+ENVIRONMENT: "staging"
+RESOURCE_GROUP_NAME: "rg-azmcp-staging"
+
+# Container Configuration - STAGING
+CONTAINER_CPU: 1.5
+CONTAINER_MEMORY: 3.0
+
+# Permissions Configuration - STAGING
+ENABLE_CONTRIBUTOR_ACCESS: true
+ENABLE_SUBSCRIPTION_READER: true
+
+# =============================================================================
+# VARIABLE GROUP: environment-config-prod
+# Description: Production environment specific configuration
+# =============================================================================
+
+# Deployment Configuration - PRODUCTION
+LOCATION: "West US 2"
+ENVIRONMENT: "prod"
+RESOURCE_GROUP_NAME: "rg-azmcp-production"
+
+# Container Configuration - PRODUCTION
+CONTAINER_CPU: 2.0
+CONTAINER_MEMORY: 4.0
+
+# Permissions Configuration - PRODUCTION  
+ENABLE_CONTRIBUTOR_ACCESS: false  # More restrictive in production
+ENABLE_SUBSCRIPTION_READER: true
+
+# =============================================================================
+# PIPELINE VARIABLES (Set in pipeline YAML or pipeline settings)
+# Description: Variables that can be set at pipeline level
+# =============================================================================
+
+# Build Configuration
+BUILD_CONFIGURATION: "Release"
+DOTNET_VERSION: "10.x"
+
+# Terraform Configuration
+TERRAFORM_VERSION: "1.9.7"
+
+# =============================================================================
+# SECURE VARIABLES (Mark as secret in Azure DevOps)
+# Description: Sensitive variables that should be encrypted
+# =============================================================================
+
+# Note: These should be marked as secret/encrypted in Azure DevOps Variable Groups
+# - Azure service principal secrets (handled by service connections)
+# - Storage account access keys (retrieved dynamically in pipelines)
+# - Any custom API keys or tokens (add as needed)
+
+# =============================================================================
+# SETUP INSTRUCTIONS
+# =============================================================================
+
+# 1. CREATE SERVICE CONNECTIONS:
+#    - Azure Resource Manager connection for container registry
+#    - Azure Resource Manager connection for Terraform deployments
+#    - Ensure service principals have appropriate permissions
+
+# 2. CREATE VARIABLE GROUPS:
+#    Library > Variable Groups > New variable group
+#    - container-registry-config
+#    - terraform-config
+#    - environment-config-dev
+#    - environment-config-staging  
+#    - environment-config-prod
+
+# 3. CREATE ENVIRONMENTS:
+#    Pipelines > Environments > New environment
+#    - azure-mcp-server-production (with manual approval gates)
+#    - azure-mcp-server-staging (optional)
+
+# 4. SETUP TERRAFORM BACKEND:
+#    Create Azure Storage Account for Terraform state:
+#    ```bash
+#    az group create --name rg-terraform-backend --location "East US"
+#    az storage account create --resource-group rg-terraform-backend \
+#      --name terraformbackendsa123 --sku Standard_LRS \
+#      --encryption-services blob
+#    az storage container create --name tfstate \
+#      --account-name terraformbackendsa123
+#    ```
+
+# 5. PERMISSIONS:
+#    Ensure pipeline service principals have:
+#    - Contributor access to target subscriptions/resource groups
+#    - Storage Blob Data Contributor on Terraform backend storage
+#    - AcrPush role on Azure Container Registry
+
+# =============================================================================
+# EXAMPLE USAGE IN PIPELINE YAML
+# =============================================================================
+
+# variables:
+# - group: container-registry-config
+# - group: terraform-config  
+# - group: environment-config-dev  # Change per environment
+
+# stages:
+# - stage: Build
+#   variables:
+#   - group: container-registry-config
+#   jobs:
+#   - job: BuildContainer
+#     steps:
+#     - script: echo "Building $(IMAGE_REPOSITORY) for $(AZURE_CONTAINER_REGISTRY)"

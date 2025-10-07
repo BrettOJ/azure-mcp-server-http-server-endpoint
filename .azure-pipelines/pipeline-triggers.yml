@@ -1,0 +1,196 @@
+# Azure DevOps Pipeline Trigger Configuration
+# This file documents the trigger patterns and can be referenced for pipeline setup
+
+# =============================================================================
+# CONTAINER BUILD PIPELINE TRIGGERS
+# =============================================================================
+
+# Branch Triggers
+branches_include:
+  - main
+  - develop  
+  - release/*
+  - hotfix/*
+
+# Path Filters for Container Build
+paths_include:
+  - 'servers/Azure.Mcp.Server/*'
+  - 'core/*'
+  - 'tools/*' 
+  - 'Dockerfile'
+  - 'AzureMcp.sln'
+  - 'Directory.Build.props'
+  - 'Directory.Build.targets'
+  - 'Directory.Packages.props'
+  - 'global.json'
+
+paths_exclude:
+  - '*.md'
+  - 'docs/*'
+  - '.terraform/*'
+  - '.azure-pipelines/*'
+  - 'Resources/*'
+  - 'eng/*/docs/*'
+
+# Pull Request Triggers for Container Build
+pr_branches_include:
+  - main
+  - develop
+
+pr_paths_include:
+  - 'servers/Azure.Mcp.Server/*'
+  - 'core/*'
+  - 'tools/*'
+  - 'Dockerfile'
+  - 'AzureMcp.sln'
+
+# =============================================================================
+# INFRASTRUCTURE DEPLOYMENT PIPELINE TRIGGERS  
+# =============================================================================
+
+# Branch Triggers for Infrastructure
+infra_branches_include:
+  - main
+  - develop
+  - feature/infrastructure/*
+
+# Path Filters for Infrastructure Deployment  
+infra_paths_include:
+  - '.terraform/*'
+
+infra_paths_exclude:
+  - '.terraform/*.md'
+  - '.terraform/.gitignore' 
+  - '.terraform/terraform.tfvars.example'
+  - '.terraform/README.md'
+
+# Pull Request Triggers for Infrastructure
+infra_pr_branches_include:
+  - main
+  - develop
+
+infra_pr_paths_include:
+  - '.terraform/*'
+
+# =============================================================================
+# SCHEDULED TRIGGERS (OPTIONAL)
+# =============================================================================
+
+# Nightly security scans
+scheduled_triggers:
+  - cron: "0 2 * * *"  # 2 AM daily
+    displayName: "Nightly Security Scan"
+    branches:
+      include:
+        - main
+    always: false  # Only run if there are changes
+
+# Weekly dependency updates check
+  - cron: "0 6 * * 1"  # 6 AM every Monday
+    displayName: "Weekly Dependency Check"  
+    branches:
+      include:
+        - develop
+    always: true   # Always run
+
+# =============================================================================
+# MANUAL TRIGGER PARAMETERS
+# =============================================================================
+
+# Parameters for manual pipeline runs
+manual_parameters:
+  - name: environment
+    displayName: "Target Environment"
+    type: string
+    default: "dev"
+    values:
+      - dev
+      - staging
+      - prod
+
+  - name: deployInfrastructure
+    displayName: "Deploy Infrastructure"
+    type: boolean
+    default: true
+
+  - name: buildContainer
+    displayName: "Build Container Image"  
+    type: boolean
+    default: true
+
+  - name: runTests
+    displayName: "Run Tests"
+    type: boolean 
+    default: true
+
+  - name: skipApproval
+    displayName: "Skip Production Approval (Admin Only)"
+    type: boolean
+    default: false
+
+# =============================================================================
+# EXAMPLE USAGE IN YAML
+# =============================================================================
+
+# Container Build Pipeline Example:
+# trigger:
+#   branches:
+#     include: [main, develop, release/*]
+#   paths:
+#     include: ['servers/Azure.Mcp.Server/*', 'core/*', 'tools/*']
+#     exclude: ['*.md', 'docs/*']
+#
+# pr:
+#   branches:
+#     include: [main, develop] 
+#   paths:
+#     include: ['servers/Azure.Mcp.Server/*', 'core/*']
+
+# Infrastructure Pipeline Example:  
+# trigger:
+#   branches:
+#     include: [main, develop]
+#   paths:
+#     include: ['.terraform/*']
+#     exclude: ['.terraform/*.md']
+#
+# schedules:
+# - cron: "0 2 * * *"
+#   displayName: Daily security scan
+#   branches:
+#     include: [main]
+
+# =============================================================================
+# TRIGGER BEST PRACTICES
+# =============================================================================
+
+# 1. Separate Concerns
+#    - Use different trigger patterns for different pipeline types
+#    - Infrastructure changes should not trigger container builds
+#    - Documentation changes should not trigger deployments
+
+# 2. Path-Based Filtering  
+#    - Include only relevant paths to avoid unnecessary runs
+#    - Exclude documentation and configuration files from builds
+#    - Use wildcards appropriately for flexibility
+
+# 3. Branch Strategy
+#    - Main branch: Full pipeline with production deployment
+#    - Develop branch: Full pipeline with development deployment  
+#    - Feature branches: Build and test only (via PR triggers)
+#    - Release branches: Full pipeline with staging deployment
+
+# 4. Pull Request Strategy
+#    - Trigger builds and tests for validation
+#    - Do not deploy infrastructure from PR builds
+#    - Use draft PRs to skip CI during development
+
+# 5. Scheduled Triggers
+#    - Use for maintenance tasks (security scans, dependency updates)
+#    - Set always: false to avoid unnecessary runs
+#    - Schedule during low-usage hours
+
+# 6. Manual Parameters
+#    - Provide flexibility for operations teams
+#    - Use clear names and descriptions
+#    - Set safe defaults for production use

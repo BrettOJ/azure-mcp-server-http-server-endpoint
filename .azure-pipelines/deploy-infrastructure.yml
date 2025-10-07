@@ -1,0 +1,425 @@
+# Azure DevOps Pipeline: Terraform Infrastructure Deployment
+# This pipeline runs Terraform init, plan, and apply to deploy the Azure MCP Server
+# infrastructure using the configuration in the .terraform folder.
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - '.terraform/*'
+    exclude:
+      - '.terraform/*.md'
+      - '.terraform/.gitignore'
+      - '.terraform/terraform.tfvars.example'
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - '.terraform/*'
+    exclude:
+      - '.terraform/*.md'
+
+# Pipeline variables
+variables:
+  # Terraform Configuration
+  terraformVersion: '1.9.7'
+  workingDirectory: '$(Build.SourcesDirectory)/.terraform'
+  
+  # Azure Configuration
+  azureSubscription: '$(AZURE_SERVICE_CONNECTION)'  # Set in variable group
+  backendResourceGroup: '$(TERRAFORM_BACKEND_RG)'   # Set in variable group
+  backendStorageAccount: '$(TERRAFORM_BACKEND_SA)'  # Set in variable group
+  backendContainerName: 'tfstate'
+  backendKey: 'azure-mcp-server.tfstate'
+  
+  # Environment Configuration
+  vmImage: 'ubuntu-latest'
+  
+# Use variable groups for sensitive configuration
+# Create these in Azure DevOps: Library > Variable Groups
+# - terraform-config: AZURE_SERVICE_CONNECTION, TERRAFORM_BACKEND_RG, TERRAFORM_BACKEND_SA
+# - environment-config: Environment-specific variables
+
+stages:
+  # Stage 1: Terraform Validation
+  - stage: TerraformValidation
+    displayName: 'Terraform Validation and Planning'
+    jobs:
+      - job: Validation
+        displayName: 'Validate Terraform Configuration'
+        pool:
+          vmImage: $(vmImage)
+        
+        steps:
+          # Checkout source code
+          - checkout: self
+            displayName: 'Checkout Source Code'
+            fetchDepth: 1
+            clean: true
+
+          # Install Terraform
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: '$(terraformVersion)'
+
+          # Azure CLI Login
+          - task: AzureCLI@2
+            displayName: 'Azure CLI Login'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "Logged in to Azure"
+                az account show
+                
+                # Ensure backend storage exists
+                echo "Checking backend storage configuration..."
+                az storage account show --name $(backendStorageAccount) --resource-group $(backendResourceGroup) || {
+                  echo "Backend storage account not found. Please create it first."
+                  exit 1
+                }
+
+          # Terraform Format Check
+          - script: |
+              terraform fmt -check -recursive
+              if [ $? -ne 0 ]; then
+                echo "##[error]Terraform files are not properly formatted. Run 'terraform fmt -recursive' to fix."
+                exit 1
+              fi
+              echo "✅ Terraform files are properly formatted"
+            displayName: 'Terraform Format Check'
+            workingDirectory: '$(workingDirectory)'
+
+          # Terraform Init with Backend Configuration
+          - task: AzureCLI@2
+            displayName: 'Terraform Init'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(workingDirectory)'
+              inlineScript: |
+                # Get storage account key for backend configuration
+                STORAGE_KEY=$(az storage account keys list --resource-group $(backendResourceGroup) --account-name $(backendStorageAccount) --query '[0].value' -o tsv)
+                
+                # Initialize Terraform with backend
+                terraform init \
+                  -backend-config="resource_group_name=$(backendResourceGroup)" \
+                  -backend-config="storage_account_name=$(backendStorageAccount)" \
+                  -backend-config="container_name=$(backendContainerName)" \
+                  -backend-config="key=$(backendKey)" \
+                  -backend-config="access_key=$STORAGE_KEY"
+                
+                echo "✅ Terraform initialized successfully"
+
+          # Terraform Validate
+          - script: |
+              terraform validate
+              if [ $? -eq 0 ]; then
+                echo "✅ Terraform configuration is valid"
+              else
+                echo "##[error]Terraform validation failed"
+                exit 1
+              fi
+            displayName: 'Terraform Validate'
+            workingDirectory: '$(workingDirectory)'
+
+          # Terraform Security Scan (using Checkov)
+          - script: |
+              # Install Checkov for security scanning
+              pip install checkov
+              
+              # Run security scan
+              checkov -d . --framework terraform --output cli --output junitxml --output-file-path $(Build.ArtifactStagingDirectory)/checkov-report.xml
+              
+              echo "Security scan completed. Check artifacts for detailed report."
+            displayName: 'Terraform Security Scan'
+            workingDirectory: '$(workingDirectory)'
+            continueOnError: true
+
+          # Publish security scan results
+          - task: PublishTestResults@2
+            displayName: 'Publish Security Scan Results'
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/checkov-report.xml'
+              searchFolder: '$(Build.ArtifactStagingDirectory)'
+              testRunTitle: 'Terraform Security Scan'
+              failTaskOnFailedTests: false
+
+      # Terraform Plan Job
+      - job: TerraformPlan
+        displayName: 'Terraform Plan'
+        dependsOn: Validation
+        condition: succeeded()
+        pool:
+          vmImage: $(vmImage)
+        
+        steps:
+          # Checkout source code
+          - checkout: self
+            displayName: 'Checkout Source Code'
+
+          # Install Terraform
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: '$(terraformVersion)'
+
+          # Terraform Init
+          - task: AzureCLI@2
+            displayName: 'Terraform Init'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(workingDirectory)'
+              inlineScript: |
+                STORAGE_KEY=$(az storage account keys list --resource-group $(backendResourceGroup) --account-name $(backendStorageAccount) --query '[0].value' -o tsv)
+                
+                terraform init \
+                  -backend-config="resource_group_name=$(backendResourceGroup)" \
+                  -backend-config="storage_account_name=$(backendStorageAccount)" \
+                  -backend-config="container_name=$(backendContainerName)" \
+                  -backend-config="key=$(backendKey)" \
+                  -backend-config="access_key=$STORAGE_KEY"
+
+          # Create Terraform variables file from pipeline variables
+          - script: |
+              # Create terraform.tfvars from pipeline variables
+              cat > terraform.tfvars << EOF
+              location = "$(LOCATION)"
+              environment = "$(ENVIRONMENT)"
+              resource_group_name = "$(RESOURCE_GROUP_NAME)"
+              container_image = "$(CONTAINER_REGISTRY)/$(IMAGE_REPOSITORY):$(IMAGE_TAG)"
+              container_cpu = $(CONTAINER_CPU)
+              container_memory = $(CONTAINER_MEMORY)
+              enable_contributor_access = $(ENABLE_CONTRIBUTOR_ACCESS)
+              enable_subscription_reader = $(ENABLE_SUBSCRIPTION_READER)
+              tags = {
+                Environment = "$(ENVIRONMENT)"
+                Project = "Azure-MCP-Server"
+                DeployedBy = "Azure-DevOps"
+                BuildId = "$(Build.BuildId)"
+              }
+              EOF
+              
+              echo "Generated terraform.tfvars:"
+              cat terraform.tfvars
+            displayName: 'Generate Terraform Variables'
+            workingDirectory: '$(workingDirectory)'
+
+          # Terraform Plan
+          - task: AzureCLI@2
+            displayName: 'Terraform Plan'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(workingDirectory)'
+              inlineScript: |
+                # Run terraform plan and save to file
+                terraform plan -var-file="terraform.tfvars" -out="$(Build.ArtifactStagingDirectory)/terraform.plan"
+                
+                # Generate human-readable plan
+                terraform show -no-color "$(Build.ArtifactStagingDirectory)/terraform.plan" > "$(Build.ArtifactStagingDirectory)/terraform-plan.txt"
+                
+                echo "✅ Terraform plan generated successfully"
+                echo ""
+                echo "📊 Plan Summary:"
+                terraform show -json "$(Build.ArtifactStagingDirectory)/terraform.plan" | jq -r '.planned_values.root_module.resources[] | "\(.type).\(.name)"' | sort | uniq -c
+
+          # Publish Terraform Plan Artifacts
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Terraform Plan'
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+              ArtifactName: 'terraform-plan'
+              publishLocation: 'Container'
+
+  # Stage 2: Manual Approval for Production
+  - stage: ApprovalGate
+    displayName: 'Deployment Approval'
+    dependsOn: TerraformValidation
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: ApprovalJob
+        displayName: 'Wait for Approval'
+        pool: server
+        environment: 'azure-mcp-server-production'  # Create this environment in Azure DevOps
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: echo "Deployment approved and proceeding..."
+
+  # Stage 3: Terraform Apply
+  - stage: TerraformApply
+    displayName: 'Terraform Apply'
+    dependsOn: 
+      - TerraformValidation
+      - ApprovalGate
+    condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/develop')))
+    jobs:
+      - job: TerraformApply
+        displayName: 'Apply Terraform Configuration'
+        pool:
+          vmImage: $(vmImage)
+        
+        steps:
+          # Checkout source code
+          - checkout: self
+            displayName: 'Checkout Source Code'
+
+          # Download Terraform plan
+          - task: DownloadBuildArtifacts@1
+            displayName: 'Download Terraform Plan'
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: 'terraform-plan'
+              downloadPath: '$(System.ArtifactsDirectory)'
+
+          # Install Terraform
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: '$(terraformVersion)'
+
+          # Terraform Init
+          - task: AzureCLI@2
+            displayName: 'Terraform Init'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(workingDirectory)'
+              inlineScript: |
+                STORAGE_KEY=$(az storage account keys list --resource-group $(backendResourceGroup) --account-name $(backendStorageAccount) --query '[0].value' -o tsv)
+                
+                terraform init \
+                  -backend-config="resource_group_name=$(backendResourceGroup)" \
+                  -backend-config="storage_account_name=$(backendStorageAccount)" \
+                  -backend-config="container_name=$(backendContainerName)" \
+                  -backend-config="key=$(backendKey)" \
+                  -backend-config="access_key=$STORAGE_KEY"
+
+          # Terraform Apply
+          - task: AzureCLI@2
+            displayName: 'Terraform Apply'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(workingDirectory)'
+              inlineScript: |
+                # Copy the plan file from artifacts
+                cp "$(System.ArtifactsDirectory)/terraform-plan/terraform.plan" .
+                
+                # Apply the plan
+                terraform apply -auto-approve terraform.plan
+                
+                echo "✅ Terraform apply completed successfully"
+                
+                # Get outputs
+                echo ""
+                echo "📊 Deployment Outputs:"
+                terraform output -json > "$(Build.ArtifactStagingDirectory)/terraform-outputs.json"
+                terraform output
+
+          # Post-deployment validation
+          - task: AzureCLI@2
+            displayName: 'Post-Deployment Validation'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(workingDirectory)'
+              inlineScript: |
+                # Get container instance details
+                CONTAINER_URL=$(terraform output -raw container_url 2>/dev/null || echo "N/A")
+                RG_NAME=$(terraform output -raw resource_group_name 2>/dev/null || echo "N/A")
+                
+                echo "🔍 Validating deployment..."
+                echo "Resource Group: $RG_NAME"
+                echo "Container URL: $CONTAINER_URL"
+                
+                # Check if container instance is running
+                if [ "$RG_NAME" != "N/A" ]; then
+                  CONTAINER_STATE=$(az container show --resource-group "$RG_NAME" --name "*" --query "instanceView.state" -o tsv 2>/dev/null || echo "Unknown")
+                  echo "Container State: $CONTAINER_STATE"
+                  
+                  if [ "$CONTAINER_STATE" = "Running" ]; then
+                    echo "✅ Container instance is running successfully"
+                  else
+                    echo "⚠️ Container instance state: $CONTAINER_STATE"
+                  fi
+                fi
+                
+                # Test container endpoint if available
+                if [ "$CONTAINER_URL" != "N/A" ] && [ "$CONTAINER_URL" != "" ]; then
+                  echo "🌐 Testing container endpoint..."
+                  curl -f -s "$CONTAINER_URL/health" -o /dev/null && echo "✅ Health endpoint responding" || echo "⚠️ Health endpoint not responding (may still be starting up)"
+                fi
+
+          # Generate deployment summary
+          - script: |
+              cd $(workingDirectory)
+              
+              # Create deployment summary
+              cat > $(Build.ArtifactStagingDirectory)/deployment-summary.md << EOF
+              # Azure MCP Server Deployment Summary
+              
+              **Build**: $(Build.BuildNumber)
+              **Date**: $(System.DateTime)
+              **Branch**: $(Build.SourceBranchName)
+              **Commit**: $(Build.SourceVersion)
+              
+              ## Resources Deployed
+              EOF
+              
+              # Add Terraform outputs to summary
+              if [ -f $(Build.ArtifactStagingDirectory)/terraform-outputs.json ]; then
+                echo "" >> $(Build.ArtifactStagingDirectory)/deployment-summary.md
+                echo "## Terraform Outputs" >> $(Build.ArtifactStagingDirectory)/deployment-summary.md
+                echo "\`\`\`json" >> $(Build.ArtifactStagingDirectory)/deployment-summary.md
+                cat $(Build.ArtifactStagingDirectory)/terraform-outputs.json >> $(Build.ArtifactStagingDirectory)/deployment-summary.md
+                echo "\`\`\`" >> $(Build.ArtifactStagingDirectory)/deployment-summary.md
+              fi
+              
+              echo "Deployment summary generated"
+            displayName: 'Generate Deployment Summary'
+
+          # Publish deployment artifacts
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Deployment Artifacts'
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+              ArtifactName: 'deployment-results'
+              publishLocation: 'Container'
+
+# Pipeline completion summary
+# This pipeline:
+# 1. ✅ Validates Terraform configuration and format
+# 2. ✅ Runs security scanning with Checkov  
+# 3. ✅ Generates and reviews Terraform plan
+# 4. ✅ Requires manual approval for production deployments
+# 5. ✅ Applies Terraform configuration safely
+# 6. ✅ Validates post-deployment state
+# 7. ✅ Generates deployment artifacts and summaries
+#
+# Required Azure DevOps setup:
+# - Service connection to Azure with Terraform permissions
+# - Variable group: terraform-config
+# - Environment: azure-mcp-server-production (with approvers)
+# - Backend storage account for Terraform state

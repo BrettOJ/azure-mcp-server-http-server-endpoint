@@ -1,23 +1,29 @@
-# Azure MCP Server Container Instance Deployment
-# This configuration deploys the Azure MCP Server container to Azure Container Instances
-# using Azure Verified Modules following Terraform best practices.
 
 terraform {
-  required_version = ">= 1.9.0"
+  required_version = ">= 1.9.7"
+}
+terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.0"
+      version = "4.47.0"
+    }
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "3.6.0"
     }
     random = {
       source  = "hashicorp/random"
-      version = "~> 3.1"
+      version = ">= 3.5.0"
     }
   }
 }
 
-# Configure the Azure Provider
 provider "azurerm" {
+  storage_use_azuread = false
+  use_msi             = false
+  tenant_id           = "f3c9952d-3ea5-4539-bd9a-7e1093f8a1b6" #konjur tenant id
+  subscription_id     = "95328200-66a3-438f-9641-aeeb101e5e37"
   features {
     resource_group {
       prevent_deletion_if_contains_resources = false
@@ -38,7 +44,7 @@ data "azurerm_client_config" "current" {}
 # Create Resource Group using Azure Verified Module
 module "resource_group" {
   source  = "Azure/avm-res-resources-resourcegroup/azurerm"
-  version = "~> 0.1.0"
+  version = "0.2.1"
 
   name     = var.resource_group_name != "" ? var.resource_group_name : "rg-azmcp-${random_string.suffix.result}"
   location = var.location
@@ -52,9 +58,9 @@ module "resource_group" {
 }
 
 # Create Log Analytics Workspace for Container Insights
-module "log_analytics" {
+module "avm-res-operationalinsights-workspace" {
   source  = "Azure/avm-res-operationalinsights-workspace/azurerm"
-  version = "~> 0.4.0"
+  version = "0.4.2"
 
   name                = "law-azmcp-${random_string.suffix.result}"
   resource_group_name = module.resource_group.name
@@ -72,9 +78,9 @@ module "log_analytics" {
 }
 
 # Create User Managed Identity for Container Instance
-module "managed_identity" {
+module "avm-res-managedidentity-userassignedidentity" {
   source  = "Azure/avm-res-managedidentity-userassignedidentity/azurerm"
-  version = "~> 0.4.0"
+  version = "0.3.4"
 
   name                = "mi-azmcp-${random_string.suffix.result}"
   location            = var.location
@@ -90,16 +96,15 @@ module "managed_identity" {
 }
 
 # Create Container Instance using Azure Verified Module
-module "container_instance" {
+module "avm-res-containerinstance-containergroup" {
   source  = "Azure/avm-res-containerinstance-containergroup/azurerm"
-  version = "~> 0.3.0"
+  version = "0.2.0"
 
   name                = "ci-azmcp-${random_string.suffix.result}"
   location            = var.location
   resource_group_name = module.resource_group.name
   os_type             = "Linux"
   restart_policy      = "Always"
-  ip_address_type     = "Public"
   dns_name_label      = "azmcp-${random_string.suffix.result}"
 
   # Container configuration
@@ -112,7 +117,7 @@ module "container_instance" {
       
       # Environment variables for Azure authentication and configuration
       environment_variables = {
-        AZURE_CLIENT_ID       = module.managed_identity.client_id
+        AZURE_CLIENT_ID       = module.avm-res-managedidentity-userassignedidentity.client_id
         AZURE_TENANT_ID       = data.azurerm_client_config.current.tenant_id
         ASPNETCORE_ENVIRONMENT = var.environment
         ASPNETCORE_URLS       = "http://+:8080"
@@ -157,25 +162,21 @@ module "container_instance" {
         timeout_seconds       = 3
         failure_threshold     = 3
       }
+      volumes = {}
     }
   }
 
   # Managed Identity configuration
-  identity = {
-    type = "UserAssigned"
-    identity_ids = [
-      module.managed_identity.resource_id
-    ]
+managed_identities = {
+    system_assigned            = false
+    user_assigned_resource_ids = [module.avm-res-managedidentity-userassignedidentity.resource_id]
   }
 
   # Log Analytics integration for monitoring
-  diagnostics = {
-    log_analytics = [
-      {
-        workspace_id = module.log_analytics.resource_id
-      }
-    ]
-  }
+diagnostics_log_analytics = {
+    workspace_id  = module.avm-res-operationalinsights-workspace.resource.workspace_id
+    workspace_key = module.avm-res-operationalinsights-workspace.resource.primary_shared_key
+}
 
   tags = merge(var.tags, {
     Environment   = var.environment
@@ -185,8 +186,9 @@ module "container_instance" {
 
   depends_on = [
     module.resource_group,
-    module.managed_identity,
-    module.log_analytics
+    module.avm-res-managedidentity-userassignedidentity,
+    module.avm-res-operationalinsights-workspace
+
   ]
 }
 
@@ -195,9 +197,9 @@ resource "azurerm_role_assignment" "contributor" {
   count                = var.enable_contributor_access ? 1 : 0
   scope                = module.resource_group.resource_id
   role_definition_name = "Contributor"
-  principal_id         = module.managed_identity.principal_id
+  principal_id         = module.avm-res-managedidentity-userassignedidentity.principal_id
 
-  depends_on = [module.managed_identity]
+  depends_on = [module.avm-res-managedidentity-userassignedidentity]
 }
 
 # Role assignment for reader access to subscription (minimal permissions)
@@ -205,7 +207,7 @@ resource "azurerm_role_assignment" "reader" {
   count                = var.enable_subscription_reader ? 1 : 0
   scope                = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
   role_definition_name = "Reader"
-  principal_id         = module.managed_identity.principal_id
+  principal_id         = module.avm-res-managedidentity-userassignedidentity.principal_id
 
-  depends_on = [module.managed_identity]
+  depends_on = [module.avm-res-managedidentity-userassignedidentity]
 }
