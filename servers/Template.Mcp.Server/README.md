@@ -1,0 +1,1 @@
+# Microsoft Template MCP Server

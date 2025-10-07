@@ -1,0 +1,65 @@
+# Build artifacts
+**/bin/
+**/obj/
+**/out/
+**/publish/
+
+# IDE files
+.vscode/
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+docs/
+
+# Test files
+**/tests/
+**/*Tests/
+**/*Test/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+**/tmp/
+
+# Package files
+*.nupkg
+*.snupkg
+
+# Node modules (if any)
+node_modules/
+
+# IDE settings
+**/.idea/
+**/.vscode/
+
+# Build configuration not needed in container
+eng/
+Resources/
+_old/
+
+# Exclude other server projects we don't need
+servers/Fabric.Mcp.Server/
+servers/Template.Mcp.Server/
+servers/Azure.Mcp.Server/src/
+
+# Exclude tools we don't need for basic functionality
+tools/
+
+# Keep only what's needed for HttpHost build

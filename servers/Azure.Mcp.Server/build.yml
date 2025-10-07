@@ -1,0 +1,17 @@
+parameters:
+- name: PublishTarget
+  type: string
+  values: [ none, internal, public ]
+  default: 'none'
+
+trigger: none
+pr: none
+
+extends:
+  template: /eng/pipelines/templates/common.yml
+  parameters:
+    ServerName: Azure.Mcp.Server
+    PublishTarget: ${{ parameters.PublishTarget }}
+    RunLiveTests: true
+    IncludeDockerRelease : true
+    IncludeNative: true

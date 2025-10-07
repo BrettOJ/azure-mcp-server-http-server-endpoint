@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  azure-mcp-http-host:
+    build:
+      context: ../../..
+      dockerfile: servers/Azure.Mcp.Server/HttpHost/Dockerfile
+    container_name: azure-mcp-http-host
+    ports:
+      - "5001:5001"
+    environment:
+      - ASPNETCORE_URLS=http://0.0.0.0:5001
+      - ASPNETCORE_ENVIRONMENT=Development
+      - DOTNET_RUNNING_IN_CONTAINER=true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

@@ -1,0 +1,45 @@
+﻿using Azure.Mcp.Core.Areas.Server.Commands;
+using Azure.Mcp.Core.Areas.Server.Options;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
+var services = new ServiceCollection();
+
+// Console logging is handy in containers
+services.AddLogging(b =>
+{
+    b.SetMinimumLevel(LogLevel.Debug);
+    b.AddSimpleConsole(o =>
+    {
+        o.SingleLine = true;
+        o.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffK ";
+    });
+});
+
+// IMPORTANT: enable HTTP transport by setting EnableInsecureTransports = true
+var opts = new ServiceStartOptions
+{
+    // Pick the discovery mode you want; 'All' exposes registry + command-factory tools
+    Mode = "all",
+    EnableInsecureTransports = true,
+
+    // Optional: scope to specific tool namespaces (leave null for everything)
+    // Namespace = new[] { "bestpractices", "storage", "keyvault" },
+
+    // Optional: read-only for safety in shared environments
+    ReadOnly = false,
+
+    // Optional: disable confirmation prompts for high-risk operations (use with care)
+    // InsecureDisableElicitation = true,
+};
+
+services.AddAzureMcpServer(opts);
+
+var sp = services.BuildServiceProvider();
+var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("HttpHost");
+log.LogInformation("Azure MCP HTTP host started. Look for the transport's bind address/port in the next log lines.");
+log.LogInformation("Transport: HTTP (EnableInsecureTransports=true).");
+
+// Keep the process alive; the MCP runtime registers the HTTP transport & begins listening.
+await Task.Delay(Timeout.InfiniteTimeSpan);
